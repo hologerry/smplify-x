@@ -15,6 +15,7 @@
 #
 # Contact: ps-license@tuebingen.mpg.de
 
+
 from collections import namedtuple
 
 import torch
@@ -75,7 +76,7 @@ class PerspectiveCamera(nn.Module):
         if rotation is None:
             rotation = torch.eye(3, dtype=dtype).unsqueeze(dim=0).repeat(batch_size, 1, 1)
 
-        rotation = nn.Parameter(rotation, requires_grad=True)
+        rotation = nn.Parameter(rotation, requires_grad=False)
         self.register_parameter("rotation", rotation)
 
         if translation is None:

@@ -108,3 +108,6 @@ venv.bak/
 .mypy_cache/
 
 smplx_parts_segm.pkl
+smplx_debug
+smplx_wlasl_output
+smplx_msasl_output

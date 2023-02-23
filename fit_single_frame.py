@@ -15,6 +15,8 @@
 #
 # Contact: ps-license@tuebingen.mpg.de
 
+
+import math
 import os
 import os.path as osp
 import pickle
@@ -24,19 +26,260 @@ import time
 from collections import defaultdict
 
 import cv2
-import fitting
+import matplotlib.pyplot as plt
 import numpy as np
 import PIL.Image as pil_img
 import torch
 
 from human_body_prior.tools.model_loader import load_vposer
-from optimizers import optim_factory
+from mpl_toolkits.mplot3d import axes3d
 from tqdm import tqdm
+
+import fitting
+
+from optimizers import optim_factory
+
+
+def imshow_keypoints(
+    img,
+    pose_result,
+    skeleton=None,
+    kpt_score_thr=0.3,
+    pose_kpt_color=None,
+    pose_link_color=None,
+    radius=2,
+    thickness=1,
+    show_keypoint_weight=False,
+):
+    """Draw keypoints and links on an image.
+
+    Args:
+            img (str or Tensor): The image to draw poses on. If an image array
+                is given, id will be modified in-place.
+            pose_result (list[kpts]): The poses to draw. Each element kpts is
+                a set of K keypoints as an Kx3 numpy.ndarray, where each
+                keypoint is represented as x, y, score.
+            kpt_score_thr (float, optional): Minimum score of keypoints
+                to be shown. Default: 0.3.
+            pose_kpt_color (np.array[Nx3]`): Color of N keypoints. If None,
+                the keypoint will not be drawn.
+            pose_link_color (np.array[Mx3]): Color of M links. If None, the
+                links will not be drawn.
+            thickness (int): Thickness of lines.
+    """
+
+    # img = mmcv.imread(img)
+    img_h, img_w, _ = img.shape
+
+    skeleton = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+        [15, 17],
+        [15, 18],
+        [15, 19],
+        [16, 20],
+        [16, 21],
+        [16, 22],
+        [91, 92],
+        [92, 93],
+        [93, 94],
+        [94, 95],
+        [91, 96],
+        [96, 97],
+        [97, 98],
+        [98, 99],
+        [91, 100],
+        [100, 101],
+        [101, 102],
+        [102, 103],
+        [91, 104],
+        [104, 105],
+        [105, 106],
+        [106, 107],
+        [91, 108],
+        [108, 109],
+        [109, 110],
+        [110, 111],
+        [112, 113],
+        [113, 114],
+        [114, 115],
+        [115, 116],
+        [112, 117],
+        [117, 118],
+        [118, 119],
+        [119, 120],
+        [112, 121],
+        [121, 122],
+        [122, 123],
+        [123, 124],
+        [112, 125],
+        [125, 126],
+        [126, 127],
+        [127, 128],
+        [112, 129],
+        [129, 130],
+        [130, 131],
+        [131, 132],
+    ]
+
+    palette = np.array(
+        [
+            [255, 128, 0],
+            [255, 153, 51],
+            [255, 178, 102],
+            [230, 230, 0],
+            [255, 153, 255],
+            [153, 204, 255],
+            [255, 102, 255],
+            [255, 51, 255],
+            [102, 178, 255],
+            [51, 153, 255],
+            [255, 153, 153],
+            [255, 102, 102],
+            [255, 51, 51],
+            [153, 255, 153],
+            [102, 255, 102],
+            [51, 255, 51],
+            [0, 255, 0],
+            [0, 0, 255],
+            [255, 0, 0],
+            [255, 255, 255],
+        ]
+    )
+
+    pose_link_color = palette[
+        [0, 0, 0, 0, 7, 7, 7, 9, 9, 9, 9, 9, 16, 16, 16, 16, 16, 16, 16]
+        + [16, 16, 16, 16, 16, 16]
+        + [0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16]
+        + [0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16]
+    ]
+
+    pose_kpt_color = palette[
+        [16, 16, 16, 16, 16, 9, 9, 9, 9, 9, 9, 0, 0, 0, 0, 0, 0] + [0, 0, 0, 0, 0, 0] + [19] * (68 + 42)
+    ]
+
+    for ii in range(1):
+
+        kpts = np.array(pose_result, copy=False)
+
+        # draw each point on image
+        if pose_kpt_color is not None:
+            assert len(pose_kpt_color) == len(kpts)
+
+            for kid, kpt in enumerate(kpts):
+                x_coord, y_coord, kpt_score = int(kpt[0]), int(kpt[1]), kpt[2]
+
+                if kpt_score < kpt_score_thr or pose_kpt_color[kid] is None:
+                    # skip the point that should not be drawn
+                    continue
+
+                color = tuple(int(c) for c in pose_kpt_color[kid])
+                if show_keypoint_weight:
+                    img_copy = img.copy()
+                    cv2.circle(img_copy, (int(x_coord), int(y_coord)), radius, color, -1)
+                    transparency = max(0, min(1, kpt_score))
+                    cv2.addWeighted(img_copy, transparency, img, 1 - transparency, 0, dst=img)
+                else:
+                    cv2.circle(img, (int(x_coord), int(y_coord)), radius, color, -1)
+
+        # draw links
+        if skeleton is not None and pose_link_color is not None:
+            assert len(pose_link_color) == len(skeleton)
+
+            for sk_id, sk in enumerate(skeleton):
+                pos1 = (int(kpts[sk[0], 0]), int(kpts[sk[0], 1]))
+                pos2 = (int(kpts[sk[1], 0]), int(kpts[sk[1], 1]))
+
+                if (
+                    pos1[0] <= 0
+                    or pos1[0] >= img_w
+                    or pos1[1] <= 0
+                    or pos1[1] >= img_h
+                    or pos2[0] <= 0
+                    or pos2[0] >= img_w
+                    or pos2[1] <= 0
+                    or pos2[1] >= img_h
+                    or kpts[sk[0], 2] < kpt_score_thr
+                    or kpts[sk[1], 2] < kpt_score_thr
+                    or pose_link_color[sk_id] is None
+                ):
+                    # skip the link that should not be drawn
+                    continue
+                color = tuple(int(c) for c in pose_link_color[sk_id])
+                if show_keypoint_weight:
+                    img_copy = img.copy()
+                    X = (pos1[0], pos2[0])
+                    Y = (pos1[1], pos2[1])
+                    mX = np.mean(X)
+                    mY = np.mean(Y)
+                    length = ((Y[0] - Y[1]) ** 2 + (X[0] - X[1]) ** 2) ** 0.5
+                    angle = math.degrees(math.atan2(Y[0] - Y[1], X[0] - X[1]))
+                    stickwidth = 2
+                    polygon = cv2.ellipse2Poly(
+                        (int(mX), int(mY)), (int(length / 2), int(stickwidth)), int(angle), 0, 360, 1
+                    )
+                    cv2.fillConvexPoly(img_copy, polygon, color)
+                    transparency = max(0, min(1, 0.5 * (kpts[sk[0], 2] + kpts[sk[1], 2])))
+                    cv2.addWeighted(img_copy, transparency, img, 1 - transparency, 0, dst=img)
+                else:
+                    cv2.line(img, pos1, pos2, color, thickness=thickness)
+
+    return img
+
+
+def hard_set_keypoints(keypoints):
+    len_shoulder = keypoints[0, 5, 0] - keypoints[0, 2, 0]
+    len_waist = len_shoulder / 1.7
+    len_nose_to_shoulder = keypoints[0, 0, 1] - keypoints[0, 1, 1]
+
+    keypoints[:, 8, 0] = keypoints[:, 1, 0]
+    keypoints[:, 8, 1] = keypoints[:, 1, 1] + 1.5 * len_shoulder
+    keypoints[:, 8, 2] = 0.65
+    keypoints[:, 9, 0] = keypoints[:, 8, 0] - 0.5 * len_waist
+    keypoints[:, 9, 1] = keypoints[:, 8, 1]
+    keypoints[:, 9, 2] = 0.65
+    keypoints[:, 12, 0] = keypoints[:, 8, 0] + 0.5 * len_waist
+    keypoints[:, 12, 1] = keypoints[:, 8, 1]
+    keypoints[:, 12, 2] = 0.65
+
+    keypoints[:, 10, 0] = keypoints[0, 9, 0]
+    keypoints[:, 10, 1] = keypoints[0, 9, 1] + 2.0 * len_waist
+    keypoints[:, 10, 2] = 0.65
+    keypoints[:, 11, 0] = keypoints[0, 9, 0]
+    keypoints[:, 11, 1] = keypoints[0, 9, 1] + 4.0 * len_waist
+    keypoints[:, 11, 2] = 0.65
+    keypoints[:, 13, 0] = keypoints[0, 12, 0]
+    keypoints[:, 13, 1] = keypoints[0, 12, 1] + 2.0 * len_waist
+    keypoints[:, 13, 2] = 0.65
+    keypoints[:, 14, 0] = keypoints[0, 12, 0]
+    keypoints[:, 14, 1] = keypoints[0, 12, 1] + 4.0 * len_waist
+    keypoints[:, 14, 2] = 0.65
+
+    return keypoints
 
 
 def fit_single_frame(
     img,
+    idx,
     keypoints,
+    keypoints_render,
     body_model,
     camera,
     joint_weights,
@@ -47,9 +290,13 @@ def fit_single_frame(
     shape_prior,
     expr_prior,
     angle_prior,
+    joints_blur=None,
+    joints_fix=None,
+    camera_transl=None,
+    camera_orient=None,
+    betas_fix=None,
     result_fn="out.pkl",
     mesh_fn="out.obj",
-    out_img_fn="overlay.png",
     loss_type="smplify",
     use_cuda=True,
     init_joints_idxs=(9, 12, 2, 5),
@@ -89,7 +336,7 @@ def fit_single_frame(
     **kwargs
 ):
     assert batch_size == 1, "PyTorch L-BFGS only supports batch_size == 1"
-
+    print(idx)
     device = torch.device("cuda") if use_cuda else torch.device("cpu")
 
     if degrees is None:
@@ -168,13 +415,19 @@ def fit_single_frame(
     else:
         body_mean_pose = body_pose_prior.get_mean().detach().cpu()
 
+    keypoints = hard_set_keypoints(keypoints)
+
     keypoint_data = torch.tensor(keypoints, dtype=dtype)
     gt_joints = keypoint_data[:, :, :2]
+    visibility = keypoint_data[:, :, 2]
+
+    # print(gt_joints)
     if use_joints_conf:
         joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
 
     # Transfer the data to the correct device
     gt_joints = gt_joints.to(device=device, dtype=dtype)
+    visibility = visibility.to(device=device, dtype=dtype)
     if use_joints_conf:
         joints_conf = joints_conf.to(device=device, dtype=dtype)
 
@@ -183,10 +436,10 @@ def fit_single_frame(
     pen_distance = None
     filter_faces = None
     if interpenetration:
-        import mesh_intersection.loss as collisions_loss  # type: ignore
+        import mesh_intersection.loss as collisions_loss
 
-        from mesh_intersection.bvh_search_tree import BVH  # type: ignore
-        from mesh_intersection.filter_faces import FilterFaces  # type: ignore
+        from mesh_intersection.bvh_search_tree import BVH
+        from mesh_intersection.filter_faces import FilterFaces
 
         assert use_cuda, "Interpenetration term can only be used with CUDA"
         assert torch.cuda.is_available(), "No CUDA Device! Interpenetration term can only be used" + " with CUDA"
@@ -248,7 +501,7 @@ def fit_single_frame(
         focal_length=focal_length,
         dtype=dtype,
     )
-
+    # print(init_t)
     camera_loss = fitting.create_loss(
         "camera_init",
         trans_estimation=init_t,
@@ -257,7 +510,7 @@ def fit_single_frame(
         dtype=dtype,
     ).to(device=device)
     camera_loss.trans_estimation[:] = init_t
-
+    #  print(init_t)
     loss = fitting.create_loss(
         loss_type=loss_type,
         joint_weights=joint_weights,
@@ -282,7 +535,7 @@ def fit_single_frame(
         **kwargs
     )
     loss = loss.to(device=device)
-
+    #   camera=camera.to(device=device)
     with fitting.FittingMonitor(batch_size=batch_size, visualize=visualize, **kwargs) as monitor:
 
         img = torch.tensor(img, dtype=dtype)
@@ -309,8 +562,9 @@ def fit_single_frame(
             camera.translation[:] = init_t.view_as(camera.translation)
             camera.center[:] = torch.tensor([W, H], dtype=dtype) * 0.5
 
-        # Re-enable gradient calculation for the camera translation
         camera.translation.requires_grad = True
+        #  camera.translation=torch.tensor([-4.9302e-03, 7.1391e-01, 2.0452e+01])
+        # Re-enable gradient calculation for the camera translation
 
         camera_opt_params = [camera.translation, body_model.global_orient]
 
@@ -322,6 +576,10 @@ def fit_single_frame(
             body_model,
             camera,
             gt_joints,
+            visibility,
+            joints_blur,
+            idx,
+            joints_fix,
             camera_loss,
             create_graph=camera_create_graph,
             use_vposer=use_vposer,
@@ -345,11 +603,23 @@ def fit_single_frame(
             vposer=vposer,
         )
 
+        if idx != 0:
+            camera_opt_params[0].requires_grad = False
+            camera_opt_params[0][0] = camera_transl
+            camera_opt_params[1].requires_grad = False
+            camera_opt_params[1][0] = camera_orient
+
+        else:
+            camera_opt_params[0].requires_grad = True
+            camera_opt_params[1].requires_grad = True
+
         if interactive:
             if use_cuda and torch.cuda.is_available():
                 torch.cuda.synchronize()
-            tqdm.write("Camera initialization done after {:.4f}".format(time.time() - camera_init_start))
-            tqdm.write("Camera initialization final loss {:.4f}".format(cam_init_loss_val))
+        #          tqdm.write('Camera initialization done after {:.4f}'.format(
+        #               time.time() - camera_init_start))
+        #          tqdm.write('Camera initialization final loss {:.4f}'.format(
+        #              cam_init_loss_val))
 
         # If the 2D detections/positions of the shoulder joints are too
         # close the rotate the body by 180 degrees and also fit to that
@@ -370,11 +640,19 @@ def fit_single_frame(
 
         # Step 2: Optimize the full model
         final_loss_val = 0
+
         for or_idx, orient in enumerate(tqdm(orientations, desc="Orientation")):
             opt_start = time.time()
 
             new_params = defaultdict(global_orient=orient, body_pose=body_mean_pose)
             body_model.reset_params(**new_params)
+            if idx != 0:
+                body_model.betas.requires_grad = False
+                body_model.betas[:, :10] = betas_fix[:10]
+
+            else:
+                body_model.betas.requires_grad = True
+
             if use_vposer:
                 with torch.no_grad():
                     pose_embedding.fill_(0)
@@ -404,6 +682,10 @@ def fit_single_frame(
                     body_model,
                     camera=camera,
                     gt_joints=gt_joints,
+                    visibility=visibility,
+                    joints_blur=joints_blur,
+                    idx=idx,
+                    joints_fix=joints_fix,
                     joints_conf=joints_conf,
                     joint_weights=joint_weights,
                     loss=loss,
@@ -441,7 +723,7 @@ def fit_single_frame(
                     torch.cuda.synchronize()
                 elapsed = time.time() - opt_start
                 tqdm.write("Body fitting Orientation {} done after {:.4f} seconds".format(or_idx, elapsed))
-                tqdm.write("Body final loss val = {:.5f}".format(final_loss_val))
+                # tqdm.write('Body final loss val = {:.5f}'.format(final_loss_val))
 
             # Get the result of the fitting process
             # Store in it the errors list in order to compare multiple
@@ -450,17 +732,10 @@ def fit_single_frame(
             result.update({key: val.detach().cpu().numpy() for key, val in body_model.named_parameters()})
             if use_vposer:
                 result["body_pose"] = pose_embedding.detach().cpu().numpy()
+            results.append({"result": result})
 
-            results.append({"loss": final_loss_val, "result": result})
-
-        with open(result_fn, "wb") as result_file:
-            if len(results) > 1:
-                min_idx = 0 if results[0]["loss"] < results[1]["loss"] else 1
-            else:
-                min_idx = 0
-            pickle.dump(results[min_idx]["result"], result_file, protocol=2)
-
-    if save_meshes or visualize:
+    if save_meshes:
+        print("Saving results and meshes")
         body_pose = vposer.decode(pose_embedding, output_type="aa").view(1, -1) if use_vposer else None
 
         model_type = kwargs.get("model_type", "smpl")
@@ -471,51 +746,36 @@ def fit_single_frame(
 
         model_output = body_model(return_verts=True, body_pose=body_pose)
         vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+        joints_blur = model_output.body_pose.reshape(1, 21, 3).detach()
+        fix_points_idx = torch.tensor([0, 1, 2, 5, 8, 9, 10, 12, 13], dtype=torch.long).to(device=joints_blur.device)
+        joints_fix = torch.index_select(joints_blur, 1, fix_points_idx)[0, :, :]
+        camera_transl_1 = camera.translation[0, :].detach()
+        camera_orient = model_output.global_orient[0, :].detach()
+        betas_fix = model_output.betas[0].detach()
+
+        results.append(
+            {
+                "body_pose_rot": model_output.body_pose.detach().cpu().numpy(),
+                "left_hand_pose_rot": model_output.left_hand_pose.detach().cpu().numpy(),
+                "right_hand_pose_rot": model_output.right_hand_pose.detach().cpu().numpy(),
+            }
+        )
+
+        with open(result_fn, "wb") as result_file:
+            pickle.dump(results, result_file, protocol=2)
+        print(f"Saved results to {result_fn}")
 
         import trimesh
 
         out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
         rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
+        # print(body_model.output)
         out_mesh.apply_transform(rot)
         out_mesh.export(mesh_fn)
+        print(f"Saved mesh to {mesh_fn}")
 
-    if visualize:
-        import pyrender
-
-        material = pyrender.MetallicRoughnessMaterial(
-            metallicFactor=0.0, alphaMode="OPAQUE", baseColorFactor=(1.0, 1.0, 0.9, 1.0)
-        )
-        mesh = pyrender.Mesh.from_trimesh(out_mesh, material=material)
-
-        scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
-        scene.add(mesh, "mesh")
-
-        camera_center = camera.center.detach().cpu().numpy().squeeze()
-        camera_transl = camera.translation.detach().cpu().numpy().squeeze()
-        # Equivalent to 180 degrees around the y-axis. Transforms the fit to
-        # OpenGL compatible coordinate system.
-        camera_transl[0] *= -1.0
-
-        camera_pose = np.eye(4)
-        camera_pose[:3, 3] = camera_transl
-
-        camera = pyrender.camera.IntrinsicsCamera(
-            fx=focal_length, fy=focal_length, cx=camera_center[0], cy=camera_center[1]
-        )
-        scene.add(camera, pose=camera_pose)
-
-        # Get the lights from the viewer
-        light_nodes = monitor.mv.viewer._create_raymond_lights()
-        for node in light_nodes:
-            scene.add_node(node)
-
-        r = pyrender.OffscreenRenderer(viewport_width=W, viewport_height=H, point_size=1.0)
-        color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
-        color = color.astype(np.float32) / 255.0
-
-        valid_mask = (color[:, :, -1] > 0)[:, :, np.newaxis]
-        input_img = img.detach().cpu().numpy()
-        output_img = color[:, :, :-1] * valid_mask + (1 - valid_mask) * input_img
-
-        img = pil_img.fromarray((output_img * 255).astype(np.uint8))
-        img.save(out_img_fn)
+    nan_flag = False
+    if final_loss_val is None:
+        nan_flag = True
+        print("nan_flag:true")
+    return joints_blur, joints_fix, camera_transl_1, camera_orient, betas_fix, nan_flag

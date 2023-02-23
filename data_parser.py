@@ -15,6 +15,7 @@
 #
 # Contact: ps-license@tuebingen.mpg.de
 
+
 import json
 import os
 import os.path as osp
@@ -42,7 +43,7 @@ def create_dataset(dataset="openpose", data_folder="data", **kwargs):
         raise ValueError("Unknown dataset: {}".format(dataset))
 
 
-def read_keypoints(keypoint_fn, use_hands=True, use_face=True, use_face_contour=False):
+def read_keypoints(keypoint_fn, use_hands=True, use_face=True, use_face_contour=True):
     with open(keypoint_fn) as keypoint_file:
         data = json.load(keypoint_file)
 
@@ -96,6 +97,7 @@ class OpenPose(Dataset):
         dtype=torch.float32,
         model_type="smplx",
         joints_to_ign=None,
+        joints_to_fix=None,
         use_face_contour=False,
         openpose_format="coco25",
         **kwargs
@@ -107,6 +109,7 @@ class OpenPose(Dataset):
         self.model_type = model_type
         self.dtype = dtype
         self.joints_to_ign = joints_to_ign
+        self.joints_to_fix = joints_to_fix
         self.use_face_contour = use_face_contour
 
         self.openpose_format = openpose_format
@@ -150,6 +153,7 @@ class OpenPose(Dataset):
         # annotation of the hips is ambiguous.
         if self.joints_to_ign is not None and -1 not in self.joints_to_ign:
             optim_weights[self.joints_to_ign] = 0.0
+
         return torch.tensor(optim_weights, dtype=self.dtype)
 
     def __len__(self):
@@ -164,22 +168,20 @@ class OpenPose(Dataset):
         img_fn = osp.split(img_path)[1]
         img_fn, _ = osp.splitext(osp.split(img_path)[1])
 
-        keypoint_fn = osp.join(self.keyp_folder, img_fn + "_keypoints.json")
-        keyp_tuple = read_keypoints(
-            keypoint_fn, use_hands=self.use_hands, use_face=self.use_face, use_face_contour=self.use_face_contour
-        )
+        # keypoint_fn = osp.join(self.keyp_folder, img_fn + '_keypoints.json')
+        # keyp_tuple = read_keypoints(keypoint_fn, use_hands=self.use_hands, use_face=self.use_face, use_face_contour=self.use_face_contour)
 
-        if len(keyp_tuple.keypoints) < 1:
-            return {}
-        keypoints = np.stack(keyp_tuple.keypoints)
+        # if len(keyp_tuple.keypoints) < 1:
+        #    return {}
+        # keypoints = np.stack(keyp_tuple.keypoints)
 
-        output_dict = {"fn": img_fn, "img_path": img_path, "keypoints": keypoints, "img": img}
-        if keyp_tuple.gender_gt is not None:
-            if len(keyp_tuple.gender_gt) > 0:
-                output_dict["gender_gt"] = keyp_tuple.gender_gt
-        if keyp_tuple.gender_pd is not None:
-            if len(keyp_tuple.gender_pd) > 0:
-                output_dict["gender_pd"] = keyp_tuple.gender_pd
+        output_dict = {"fn": img_fn, "img_path": img_path, "img": img}
+        # if keyp_tuple.gender_gt is not None:
+        #     if len(keyp_tuple.gender_gt) > 0:
+        #         output_dict['gender_gt'] = keyp_tuple.gender_gt
+        # if keyp_tuple.gender_pd is not None:
+        #     if len(keyp_tuple.gender_pd) > 0:
+        #     output_dict['gender_pd'] = keyp_tuple.gender_pd
         return output_dict
 
     def __iter__(self):

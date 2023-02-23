@@ -89,6 +89,7 @@ def smpl_to_openpose(
 
     """
     if openpose_format.lower() == "coco25":
+        print("openpose_format is 'coco25'")
         if model_type == "smpl":
             return np.array(
                 [24, 12, 17, 19, 21, 16, 18, 20, 0, 2, 5, 8, 1, 4, 7, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34],
@@ -133,6 +134,54 @@ def smpl_to_openpose(
                 #  end_idx = 127 + 17 * use_face_contour
                 face_mapping = np.arange(76, 127 + 17 * use_face_contour, dtype=np.int32)
                 mapping += [face_mapping]
+
+            return np.concatenate(mapping)
+        else:
+            raise ValueError("Unknown model type: {}".format(model_type))
+    elif openpose_format.lower() == "cocowholebody":
+        print("openpose_format is 'cocowholebody'")
+        if model_type == "smpl":
+            return np.array(
+                [24, 26, 25, 28, 27, 16, 17, 18, 19, 20, 21, 1, 2, 4, 5, 7, 8, 29, 30, 31, 32, 33, 34], dtype=np.int32
+            )
+        elif model_type == "smplh":
+            body_mapping = np.array(
+                [52, 12, 17, 19, 21, 16, 18, 20, 0, 2, 5, 8, 1, 4, 7, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62],
+                dtype=np.int32,
+            )
+            mapping = [body_mapping]
+            if use_hands:
+                lhand_mapping = np.array(
+                    [20, 34, 35, 36, 63, 22, 23, 24, 64, 25, 26, 27, 65, 31, 32, 33, 66, 28, 29, 30, 67],
+                    dtype=np.int32,
+                )
+                rhand_mapping = np.array(
+                    [21, 49, 50, 51, 68, 37, 38, 39, 69, 40, 41, 42, 70, 46, 47, 48, 71, 43, 44, 45, 72],
+                    dtype=np.int32,
+                )
+                mapping += [lhand_mapping, rhand_mapping]
+            return np.concatenate(mapping)
+        # SMPLX
+        elif model_type == "smplx":
+            body_mapping = np.array(
+                [55, 57, 56, 59, 58, 16, 17, 18, 19, 20, 21, 1, 2, 4, 5, 7, 8, 60, 61, 62, 63, 64, 65], dtype=np.int32
+            )
+            mapping = [body_mapping]
+            if use_face:
+                #  end_idx = 127 + 17 * use_face_contour
+                face_mapping = np.arange(76, 127, dtype=np.int32)
+                mapping += [face_mapping]
+            if use_hands:
+                lhand_mapping = np.array(
+                    [20, 37, 38, 39, 66, 25, 26, 27, 67, 28, 29, 30, 68, 34, 35, 36, 69, 31, 32, 33, 70],
+                    dtype=np.int32,
+                )
+                rhand_mapping = np.array(
+                    [21, 52, 53, 54, 71, 40, 41, 42, 72, 43, 44, 45, 73, 49, 50, 51, 74, 46, 47, 48, 75],
+                    dtype=np.int32,
+                )
+
+                mapping += [lhand_mapping, rhand_mapping]
 
             return np.concatenate(mapping)
         else:

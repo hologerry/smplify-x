@@ -20,13 +20,15 @@ import os
 import os.path as osp
 import pickle
 
+import PIL.Image as pil_img
 import pyrender
 import smplx
 import torch
 import trimesh
 
-from cmd_parser import parse_config
 from human_body_prior.tools.model_loader import load_vposer
+
+from cmd_parser import parse_config
 from utils import JointMapper
 
 
@@ -45,7 +47,7 @@ if __name__ == "__main__":
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")
-
+    video_id = "00583"
     model_type = args.get("model_type", "smplx")
     print("Model type:", model_type)
     print(args.get("model_folder"))
@@ -86,6 +88,10 @@ if __name__ == "__main__":
     for pkl_path in pkl_paths:
         with open(pkl_path, "rb") as f:
             data = pickle.load(f, encoding="latin1")
+
+        print(data[0].keys())
+        data = data[0]["result"]
+
         if use_vposer:
             with torch.no_grad():
                 pose_embedding[:] = torch.tensor(data["body_pose"], device=device, dtype=dtype)
@@ -112,4 +118,12 @@ if __name__ == "__main__":
 
         scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
         scene.add(mesh, "mesh")
-        pyrender.Viewer(scene, use_raymond_lighting=True)
+        # viewer = pyrender.Viewer(scene, use_raymond_lighting=True)
+
+        W = 256
+        H = 256
+        r = pyrender.OffscreenRenderer(viewport_width=W, viewport_height=H, point_size=1.0)
+        color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
+
+        color = pil_img.fromarray(color)
+        color.save("smplx_debug/img_meanpose/" + video_id + "/" + "0000.png")
