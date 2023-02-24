@@ -43,10 +43,7 @@ from optimizers import optim_factory
 def imshow_keypoints(
     img,
     pose_result,
-    skeleton=None,
     kpt_score_thr=0.3,
-    pose_kpt_color=None,
-    pose_link_color=None,
     radius=2,
     thickness=1,
     show_keypoint_weight=False,
@@ -333,7 +330,7 @@ def fit_single_frame(
     ign_part_pairs=None,
     left_shoulder_idx=2,
     right_shoulder_idx=5,
-    **kwargs
+    **kwargs,
 ):
     assert batch_size == 1, "PyTorch L-BFGS only supports batch_size == 1"
     print(idx)
@@ -532,7 +529,7 @@ def fit_single_frame(
         search_tree=search_tree,
         tri_filtering_module=filter_faces,
         dtype=dtype,
-        **kwargs
+        **kwargs,
     )
     loss = loss.to(device=device)
     #   camera=camera.to(device=device)

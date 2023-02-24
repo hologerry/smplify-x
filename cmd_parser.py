@@ -342,6 +342,11 @@ def parse_config(argv=None):
     # parser.add_argument("--start_idx", default=0, type=int, help="start idx")
     # parser.add_argument("--end_idx", default=100, type=int, help="end idx")
 
+    parser.add_argument("--split", default="test", type=str, help="The split of the dataset to use")
+    parser.add_argument("--part_idx", default=0, type=int, help="The part of the dataset to use")
+    parser.add_argument("--part_num", default=2, type=int, help="The number of parts of the dataset to use")
+    parser.add_argument("--num_process_videos", default=-1, type=int, help="The number of videos to process")
+
     args = parser.parse_args(argv)
 
     args_dict = vars(args)

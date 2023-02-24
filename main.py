@@ -27,6 +27,8 @@ import smplx
 import torch
 import yaml
 
+from tqdm import tqdm
+
 from camera import create_camera
 from cmd_parser import parse_config
 from data_parser import create_dataset
@@ -117,16 +119,30 @@ def main(**args):
     with open(coco_wholebody_pkl, "rb") as f:
         coco_wholebody_dict = pickle.load(f)
 
-    video_names = ["00583"]  # video_names refers to the video id
+    split = args.get("split", "test")
+    split_file = os.path.join(data_folder, f"{split}.pkl")
+    with open(split_file, "rb") as f:
+        split_dicts = pickle.load(f)
+
+    num_process_videos = args.get("num_process_videos", -1)
+    if num_process_videos > 0:
+        cur_split_dicts = split_dicts[:num_process_videos]
+    else:
+        part_idx = args.get("part_idx", 0)
+        part_num = args.get("part_num", 1)
+        cur_split_dicts = split_dicts[part_idx::part_num]
 
     nan_flag = False
 
-    print(f"num of videos {len(video_names)}")
+    for vid_dict in tqdm(cur_split_dicts, total=len(cur_split_dicts), leave=False):
+        video_name = vid_dict["name"]
+        seq_len = vid_dict["seq_len"]
 
-    for vid_id in range(1):
+        frames_sub_name = "frames1" if "MSASL" in data_folder else "frames"
 
-        frames_folder = os.path.join(data_folder, "frames", video_names[vid_id])
+        frames_folder = os.path.join(data_folder, frames_sub_name, video_name)
         dataset_obj = create_dataset(img_folder=frames_folder, **args)
+        assert len(dataset_obj) == seq_len
         start = time.time()
 
         input_gender = args.pop("gender", "neutral")
@@ -238,19 +254,18 @@ def main(**args):
         # Add a fake batch dimension for broadcasting
         joint_weights.unsqueeze_(dim=0)
 
-        coco_kps = np.array(coco_wholebody_dict[video_names[vid_id]])
+        coco_kps = np.array(coco_wholebody_dict[video_name])
 
         op_keypoints = convert_coco_keypoints_to_openpose(coco_kps)
 
-        cur_video_result_folder = osp.join(result_folder, video_names[vid_id])
+        cur_video_result_folder = osp.join(result_folder, video_name)
         os.makedirs(cur_video_result_folder, exist_ok=True)
-        cur_video_mesh_folder = osp.join(mesh_folder, video_names[vid_id])
+        cur_video_mesh_folder = osp.join(mesh_folder, video_name)
         os.makedirs(cur_video_mesh_folder, exist_ok=True)
 
         nan_flag = False
         for idx, data in enumerate(dataset_obj):
-            if idx == len(dataset_obj) - 2:
-                break
+
             img = data["img"]
             fn = data["fn"]
 
@@ -313,6 +328,7 @@ def main(**args):
 
         with open(os.path.join(cur_video_mesh_folder, "camera.pkl"), "wb") as f:
             pickle.dump(camera_transl.cpu(), f)
+
 
 if __name__ == "__main__":
     args = parse_config()

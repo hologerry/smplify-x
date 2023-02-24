@@ -389,9 +389,9 @@ class SMPLifyLoss(nn.Module):
         **kwargs
     ):
 
-        blur_loss_weight = 8000
-        blur_loss_weight_1 = 15000
-        # joints_fix_weight = 0  # 100000
+        smooth_loss_weight = 8000
+        smooth_loss_weight_1 = 15000
+
         left_elbow_weight = 3000
         right_elbow_weight = 3000
         projected_joints = camera(body_model_output.joints)
@@ -404,11 +404,9 @@ class SMPLifyLoss(nn.Module):
         if visibility[0, 4] > 0.65:
             right_elbow_weight = 0
         if idx == 0:
-            blur_loss_weight = 0
-            blur_loss_weight_1 = 0
-            # joints_fix_weight = 0
-        # fix_points_idx = torch.tensor([0, 1, 2, 3, 4, 5, 8], dtype=torch.long).to(device=weights.device)
-        # gt_fix_points = torch.zeros([1, 7, 3], dtype=gt_joints.dtype)
+            smooth_loss_weight = 0
+            smooth_loss_weight_1 = 0
+
         zero_pose = torch.zeros([1, 1, 3], dtype=gt_joints.dtype).to(device=weights.device)
         # gt_fix_points[0] = torch.index_select(joints_blur, 1, fix_points_idx)[0, :, :]
         # gt_fix_points = gt_fix_points.to(device=weights.device)
@@ -439,7 +437,7 @@ class SMPLifyLoss(nn.Module):
         blur_loss_0 = self.robustifier(joints_to_blur - joints_blur)
         blur_loss_1 = self.robustifier(joints_to_blur[:, 11:19, :] - joints_blur[:, 11:19, :])
 
-        blur_loss = torch.sum(blur_loss_0) * blur_loss_weight + torch.sum(blur_loss_1) * blur_loss_weight_1
+        blur_loss = torch.sum(blur_loss_0) * smooth_loss_weight + torch.sum(blur_loss_1) * smooth_loss_weight_1
         elbow_loss = (
             torch.sum(
                 self.robustifier(joints_to_blur[:, 17, :] - zero_pose)

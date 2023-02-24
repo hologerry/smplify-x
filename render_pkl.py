@@ -32,22 +32,12 @@ from human_body_prior.tools.model_loader import load_vposer
 from numpy import pi
 from pyrender.light import DirectionalLight
 from pyrender.node import Node
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from tqdm import tqdm
 
 from cmd_parser import parse_config
+from fit_single_frame import imshow_keypoints
 from utils import JointMapper
-
-
-def read_pickle(work_path):
-    data_list = []
-    with open(work_path, "rb") as f:
-        while True:
-            try:
-                data = pickle.load(f)
-                data_list.append(data)
-            except EOFError:
-                break
-    return data_list
 
 
 def _create_raymond_lights():
@@ -74,33 +64,6 @@ def _create_raymond_lights():
         nodes.append(Node(light=DirectionalLight(color=np.ones(3), intensity=1.0), matrix=matrix))
 
     return nodes
-
-
-class GuassianBlur:
-    def __init__(self, r, sigma=1):
-        # 按照guassian方式构建kernel，输入参数高斯模糊半径r
-        self.r = r
-        self.kernel = np.empty(2 * r + 1)
-        total = 0
-        for i in range(2 * r + 1):
-            self.kernel[i] = np.exp(-((i - r) ** 2) / (2 * sigma**2)) / ((2 * pi) ** 1 / 2 * sigma**2)
-            # self.kernel[i] = 1.
-            total += self.kernel[i]
-        self.kernel /= total
-
-    def guassian_blur(self, mesh, flag=0):
-        b, l, k = mesh.shape
-        mesh_copy = np.zeros([b + 2 * self.r, l, k])
-        mesh_copy[: self.r, :, :] = mesh[0, :, :]
-        mesh_copy[self.r : b + self.r, :, :] = mesh
-        mesh_copy[b + self.r : b + 2 * self.r, :, :] = mesh[-1, :, :]
-
-        for i in range(k):
-            for j in range(self.r, self.r + b):
-                # for m in range(k):
-                mesh_copy[j, 0, i] = np.sum(self.kernel * mesh_copy[j - self.r : j + self.r + 1, 0, i])  # 卷积运算
-
-        return mesh_copy[self.r : self.r + b, :, :]
 
 
 if __name__ == "__main__":
@@ -165,76 +128,76 @@ if __name__ == "__main__":
 
     os.makedirs(f"{output_folder}/img_meanpose", exist_ok=True)
 
-    video_ids = ["00583"]
+    frames_sub_name = "frames1" if "MSASL" in data_folder else "frames"
 
-    for video_id in tqdm(video_ids, leave=False):
+    split = args.get("split", "test")
+    split_file = os.path.join(data_folder, f"{split}.pkl")
+    with open(split_file, "rb") as f:
+        split_dicts = pickle.load(f)
+
+    num_process_videos = args.get("num_process_videos", -1)
+    if num_process_videos > 0:
+        cur_split_dicts = split_dicts[:num_process_videos]
+    else:
+        part_idx = args.get("part_idx", 0)
+        part_num = args.get("part_num", 1)
+        cur_split_dicts = split_dicts[part_idx::part_num]
+
+    for vid_dict in tqdm(cur_split_dicts, total=len(cur_split_dicts), leave=False):
         # print("video", video_id)
-        pkl_paths = sorted(os.listdir(f"{output_folder}/results/" + video_id))
-        os.makedirs(f"{output_folder}/img_meanpose/" + video_id, exist_ok=True)
-        with open(f"{output_folder}/results/" + video_id + "/" + pkl_paths[0], "rb") as f:
-            data = pickle.load(f, encoding="latin1")  # first frame data
-        # print(data[0].keys())
-        # print(data[0]["result"].keys())
+        video_name = vid_dict["name"]
+        seq_len = vid_dict["seq_len"]
+        pkl_path = os.path.join(output_folder, "results", video_name)
+        pkl_files = sorted(os.listdir(pkl_path))
+        num_pkl_files = len(pkl_files)
+
+        cur_vid_mean_pose_img_folder = os.path.join(output_folder, "img_meanpose", video_name)
+
+        os.makedirs(cur_vid_mean_pose_img_folder, exist_ok=True)
 
         est_params = {}
-        for key, val in data[0]["result"].items():
-            if key == "camera_rotation":
-                data_key = np.zeros([len(pkl_paths), 1, 3, 3])
-                for idx, pkl_path in enumerate(pkl_paths):
-                    pkl_path = f"{output_folder}/results/" + video_id + "/" + pkl_path
-                    with open(pkl_path, "rb") as f:
-                        data_i = pickle.load(f, encoding="latin1")
-                    data_key[idx] = data_i[0]["result"][key]
-                est_params[key] = data_key
-            else:
-                data_key = np.zeros([len(pkl_paths), 1, data[0]["result"][key].shape[1]])
-                for idx, pkl_path in enumerate(pkl_paths):
-                    pkl_path = f"{output_folder}/results/" + video_id + "/" + pkl_path
-                    with open(pkl_path, "rb") as f:
-                        data_i = pickle.load(f, encoding="latin1")
-                    data_key[idx] = data_i[0]["result"][key]
-                est_params[key] = data_key
+        for pkl_name in pkl_files:
+            with open(os.path.join(pkl_path, pkl_name), "rb") as f:
+                data = pickle.load(f)
+            for key, val in data[0]["result"].items():
+                if key not in est_params:
+                    est_params[key] = []
+                est_params[key].append(val)
 
-        #####blur#######
+        for key, val in est_params.items():
+            cat_val = np.concatenate(val, axis=0)
+            # smooth across frames
+            est_params[key] = gaussian_filter1d(cat_val, sigma=1, axis=0)
 
-        for key, val in data[0]["result"].items():
-            if key == "camera_rotation":
-                data_temp = est_params[key].reshape(-1, 1, 9)
-                GuassianBlur_ = GuassianBlur(2)
-                out_smooth = GuassianBlur_.guassian_blur(data_temp, flag=0)
-                est_params[key] = out_smooth.reshape(-1, 1, 3, 3)
-            else:
-                GuassianBlur_ = GuassianBlur(2)
-                out_smooth = GuassianBlur_.guassian_blur(est_params[key], flag=0)
-                est_params[key] = out_smooth
+        for idx, pkl_name in tqdm(enumerate(pkl_files), total=len(pkl_files), desc=video_name):
 
-        for idx, pkl_path in tqdm(enumerate(pkl_paths), total=len(pkl_paths), desc=video_id):
-
-            frame_idx = pkl_path.split(".")[0]
-            pkl_path = f"{output_folder}/results/" + video_id + "/" + pkl_path
-            with open(pkl_path, "rb") as f:
+            with open(os.path.join(pkl_path, pkl_name), "rb") as f:
                 data = pickle.load(f, encoding="latin1")
             if use_vposer:
                 with torch.no_grad():
-                    pose_embedding[:] = torch.tensor(est_params["body_pose"][idx], device=device, dtype=dtype)
+                    pose_embedding[:] = torch.tensor(
+                        est_params["body_pose"][idx : idx + 1], device=device, dtype=dtype
+                    )
 
-            est_params_i = {}
+            cur_frame_est_params = {}
             for key, val in data[0]["result"].items():
 
                 if key == "body_pose" and use_vposer:
                     body_pose = vposer.decode(pose_embedding, output_type="aa").view(1, -1)
-                    if model_type == "smpl":
-                        wrist_pose = torch.zeros(
-                            [body_pose.shape[0], 6], dtype=body_pose.dtype, device=body_pose.device
-                        )
-                        body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-                    est_params_i["body_pose"] = body_pose
+                    # if model_type == "smpl":
+                    #     print("model_type is smpl, add wrist pose")
+                    #     wrist_pose = torch.zeros([body_pose.shape[0], 6], dtype=dtype, device=device)
+                    #     body_pose = torch.cat([body_pose, wrist_pose], dim=1)
+                    cur_frame_est_params["body_pose"] = body_pose
                 elif key == "betas":
-                    est_params_i[key] = torch.zeros([1, 10], dtype=dtype, device=device)
+                    # use the mean shape (betas)
+                    cur_frame_est_params[key] = torch.zeros([1, 10], dtype=dtype, device=device)
                 else:
-                    est_params_i[key] = torch.tensor(est_params[key][idx], dtype=dtype, device=device)
+                    cur_frame_est_params[key] = torch.tensor(
+                        est_params[key][idx : idx + 1], dtype=dtype, device=device
+                    )
 
-            model_output = model(**est_params_i)
+            model_output = model(**cur_frame_est_params)
             vertices = model_output.vertices.detach().cpu().numpy().squeeze()
 
             out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
@@ -244,118 +207,91 @@ if __name__ == "__main__":
             mesh = pyrender.Mesh.from_trimesh(out_mesh, material=material)
 
             scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
-            light = pyrender.DirectionalLight(color=[1, 1, 1], intensity=5e2)
             scene.add(mesh, "mesh")
+
+            light = pyrender.DirectionalLight(color=[1, 1, 1], intensity=5e2)
+            # light_pose = np.eye(4)
+            light_pose = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
+            scene.add(light, pose=light_pose)
+
+            light_nodes = _create_raymond_lights()
+            for node in light_nodes:
+                scene.add_node(node)
 
             camera_center = [128.0, 128.0]
-            camera_transl = np.zeros(3)
-            camera_transl[0] = camera_default_transl[0]
-            camera_transl[1] = camera_default_transl[1]
-            camera_transl[2] = camera_default_transl[2]
-
-            camera_transl[2] *= -1.0
-            camera_pose = np.eye(4)
-            camera_pose[:3, 3] = camera_transl
-            camera_pose[:3, :3] = [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
-            # camera_pose[:3, :3] = [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
-            pose = np.eye(4)
-            pose = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
-            scene.add(light, pose=pose)
 
             focal_length = 5000
             camera = pyrender.camera.IntrinsicsCamera(
                 fx=focal_length, fy=focal_length, cx=camera_center[0], cy=camera_center[1]
             )
-            scene.add(camera, pose=camera_pose)
 
-            registered_keys = dict()
+            front_camera_transl = np.zeros(3)
+            front_camera_transl[0] = camera_default_transl[0]
+            front_camera_transl[1] = camera_default_transl[1]
+            front_camera_transl[2] = -1.0 * camera_default_transl[2]
+            front_camera_pose = np.eye(4)
+            front_camera_pose[:3, 3] = front_camera_transl
+            front_camera_pose[:3, :3] = [[1, 0, 0], [0, -1, 0], [0, 0, -1]]
 
-            light_nodes = _create_raymond_lights()
-            for node in light_nodes:
-                scene.add_node(node)
-
-            r = pyrender.OffscreenRenderer(viewport_width=W, viewport_height=H, point_size=1.0)
-            color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
-
-            color = pil_img.fromarray(color)
-            color.save(f"{output_folder}/img_meanpose/" + video_id + "/" + frame_idx + "_front.png")
-
-            ###############################################################################################3
-            out_mesh = trimesh.Trimesh(vertices, model.faces, process=False)
-            material = pyrender.MetallicRoughnessMaterial(
-                metallicFactor=0.0, alphaMode="OPAQUE", baseColorFactor=(1.0, 1.0, 0.9, 1.0)
-            )
-            mesh = pyrender.Mesh.from_trimesh(out_mesh, material=material)
-
-            scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
-            light = pyrender.DirectionalLight(color=[1, 1, 1], intensity=5e2)
-            scene.add(mesh, "mesh")
-            # camera_center = [128., 128.]
-            camera_transl = np.zeros(3)
-            camera_transl[0] = camera_default_transl[2]
-            camera_transl[1] = camera_default_transl[1]
-            camera_transl[2] = camera_default_transl[0]
-            camera_transl[2] *= -1.0
-            camera_pose = np.eye(4)
-            camera_pose[:3, 3] = camera_transl
-            camera_pose[:3, :3] = [[0, 0, 1], [0, 1, 0], [1, 0, 0]]
-            # camera_pose[:3, :3] = [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
-            pose = np.eye(4)
-            pose = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
-            scene.add(light, pose=pose)
-
-            focal_length = 5000
-            camera = pyrender.camera.IntrinsicsCamera(
-                fx=focal_length, fy=focal_length, cx=camera_center[0], cy=camera_center[1]
-            )
-            scene.add(camera, pose=camera_pose)
-
-            light_nodes = _create_raymond_lights()
-            for node in light_nodes:
-                scene.add_node(node)
+            camera_node = scene.add(camera, pose=front_camera_pose)
 
             r = pyrender.OffscreenRenderer(viewport_width=W, viewport_height=H, point_size=1.0)
-            color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
+            front_color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
 
-            color = pil_img.fromarray(color)
-            color.save(f"{output_folder}/img_meanpose/" + video_id + "/" + frame_idx + "_side.png")
+            front_color = pil_img.fromarray(front_color)
+            front_img_path = os.path.join(cur_vid_mean_pose_img_folder, f"{idx:03d}_front.png")
+            front_color.save(front_img_path)
 
-        keypoints = np.array(keypoints_all[video_id])
+            side_camera_transl = np.zeros(3)
+            side_camera_transl[0] = camera_default_transl[2]
+            side_camera_transl[1] = camera_default_transl[1]
+            side_camera_transl[2] = -1.0 * camera_default_transl[0]
+
+            side_camera_pose = np.eye(4)
+            side_camera_pose[:3, 3] = side_camera_transl
+            side_camera_pose[:3, :3] = [[0, 0, 1], [0, -1, 0], [1, 0, 0]]
+
+            scene.set_pose(camera_node, pose=side_camera_pose)
+
+            side_color, _ = r.render(scene, flags=pyrender.RenderFlags.RGBA)
+
+            side_color = pil_img.fromarray(side_color)
+            side_img_path = os.path.join(cur_vid_mean_pose_img_folder, f"{idx:03d}_side.png")
+            side_color.save(side_img_path)
+
+        keypoints = np.array(keypoints_all[video_name])
 
         cap_fps = 13
 
-        size = (256, 768)
-
-        out_frame = np.zeros((256, 768, 3), dtype=np.uint8)
-
-        images_path = os.path.join("/D_data/SL/data/WLASL", "frames", video_id)
-        images_paths = sorted(os.listdir(images_path))
-        n_frames = len(images_paths)
+        images_path = os.path.join(data_folder, frames_sub_name, video_name)
+        images_names = sorted(os.listdir(images_path))
+        n_frames = len(images_names)
 
         res_video_path = os.path.join(f"{output_folder}", "results_meanpose")
         os.makedirs(res_video_path, exist_ok=True)
-        resulename = os.path.join(res_video_path, f"{video_id}_meanpose.mp4")
+        out_video_path = os.path.join(res_video_path, f"{video_name}_meanpose.mp4")
 
-        tmp_folder = os.path.join("/tmp/", video_id)
+        tmp_folder = os.path.join("/tmp/", video_name)
         os.makedirs(tmp_folder, exist_ok=True)
         for frame_idx in range(1, n_frames - 1):
             if keypoints[frame_idx - 1, 10, 2] < 0.7 and keypoints[frame_idx - 1, 9, 2] < 0.7:
                 continue
 
-            file0 = os.path.join("/D_data/SL/data/WLASL", "frames", video_id, images_paths[frame_idx])
-            file1 = os.path.join(f"{output_folder}/img_meanpose", video_id, f"{frame_idx:03d}_front.png")
-            file2 = os.path.join(f"{output_folder}/img_meanpose", video_id, f"{frame_idx:03d}_side.png")
+            file0 = os.path.join(images_path, images_names[frame_idx])
+            file1 = os.path.join(cur_vid_mean_pose_img_folder, f"{frame_idx:03d}_front.png")
+            file2 = os.path.join(cur_vid_mean_pose_img_folder, f"{frame_idx:03d}_side.png")
 
             img0 = cv2.imread(file0)
+            img0_kp = imshow_keypoints(img0, keypoints[frame_idx - 1], kpt_score_thr=0.5)
             img1 = cv2.imread(file1)
             img2 = cv2.imread(file2)
 
-            out_frame[:256, :256, :] = img0[:, :, :]
+            out_frame = np.zeros((256, 768, 3), dtype=np.uint8)
+            out_frame[:256, :256, :] = img0_kp[:, :, :]
             out_frame[:256, 256:512, :] = img1[:, :, :]
             out_frame[:256, 512:, :] = img2[:, :, :]
 
             cv2.imwrite(os.path.join(tmp_folder, f"{frame_idx:03d}.png"), out_frame)
 
-        os.system(
-            f"ffmpeg -hide_banner -loglevel error -framerate {cap_fps} -pattern_type glob -i '{tmp_folder}/*.png' -c:v libx264 -pix_fmt yuv420p -y {resulename}"
-        )
+        cmd = f"ffmpeg -hide_banner -loglevel error -framerate {cap_fps} -pattern_type glob -i '{tmp_folder}/*.png' -c:v libx264 -pix_fmt yuv420p -y {out_video_path}"
+        os.system(cmd)
