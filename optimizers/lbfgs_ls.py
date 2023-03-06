@@ -387,6 +387,7 @@ class LBFGS(Optimizer):
 
             # directional derivative is below tolerance
             if gtd > -tolerance_change:
+                print("gtd > -tolerance_change ", n_iter)
                 break
 
             # optional line search: user function
@@ -426,20 +427,25 @@ class LBFGS(Optimizer):
             # check conditions
             ############################################################
             if n_iter == max_iter:
+                print("reached max number of iterations ", n_iter)
                 break
 
             if current_evals >= max_eval:
+                print("max nb of function evals. ", current_evals)
                 break
 
             # optimal condition
             if opt_cond:
+                print("optimality condition below tolerance ", n_iter)
                 break
 
             # lack of progress
             if d.mul(t).abs().max() <= tolerance_change:
+                print("change in d.mul(t).abs().max() was below tolerance", n_iter)
                 break
 
             if abs(loss - prev_loss) < tolerance_change:
+                print("change in abs(loss - prev_loss) was below tolerance", n_iter)
                 break
 
         state["d"] = d

@@ -128,7 +128,7 @@ if __name__ == "__main__":
 
     os.makedirs(f"{output_folder}/img_meanpose", exist_ok=True)
 
-    frames_sub_name = "frames1" if "MSASL" in data_folder else "frames"
+    frames_sub_name = "frames"
 
     split = args.get("split", "test")
     split_file = os.path.join(data_folder, f"{split}.pkl")

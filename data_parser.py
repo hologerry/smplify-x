@@ -28,6 +28,7 @@ import numpy as np
 import torch
 
 from torch.utils.data import Dataset
+
 from utils import smpl_to_openpose
 
 
@@ -100,7 +101,7 @@ class OpenPose(Dataset):
         joints_to_fix=None,
         use_face_contour=False,
         openpose_format="coco25",
-        **kwargs
+        **kwargs,
     ):
         super(OpenPose, self).__init__()
 
@@ -168,20 +169,24 @@ class OpenPose(Dataset):
         img_fn = osp.split(img_path)[1]
         img_fn, _ = osp.splitext(osp.split(img_path)[1])
 
-        # keypoint_fn = osp.join(self.keyp_folder, img_fn + '_keypoints.json')
-        # keyp_tuple = read_keypoints(keypoint_fn, use_hands=self.use_hands, use_face=self.use_face, use_face_contour=self.use_face_contour)
+        # output_dict = {"fn": img_fn, "img_path": img_path, "img": img}
+        # return output_dict
+        keypoint_fn = osp.join(self.keyp_folder, f"{img_fn}.json")
+        keyp_tuple = read_keypoints(
+            keypoint_fn, use_hands=self.use_hands, use_face=self.use_face, use_face_contour=self.use_face_contour
+        )
 
-        # if len(keyp_tuple.keypoints) < 1:
-        #    return {}
-        # keypoints = np.stack(keyp_tuple.keypoints)
+        if len(keyp_tuple.keypoints) < 1:
+            return {}
+        keypoints = np.stack(keyp_tuple.keypoints)
 
-        output_dict = {"fn": img_fn, "img_path": img_path, "img": img}
-        # if keyp_tuple.gender_gt is not None:
-        #     if len(keyp_tuple.gender_gt) > 0:
-        #         output_dict['gender_gt'] = keyp_tuple.gender_gt
-        # if keyp_tuple.gender_pd is not None:
-        #     if len(keyp_tuple.gender_pd) > 0:
-        #     output_dict['gender_pd'] = keyp_tuple.gender_pd
+        output_dict = {"fn": img_fn, "img_path": img_path, "img": img, "keypoints": keypoints}
+        if keyp_tuple.gender_gt is not None:
+            if len(keyp_tuple.gender_gt) > 0:
+                output_dict["gender_gt"] = keyp_tuple.gender_gt
+        if keyp_tuple.gender_pd is not None:
+            if len(keyp_tuple.gender_pd) > 0:
+                output_dict["gender_pd"] = keyp_tuple.gender_pd
         return output_dict
 
     def __iter__(self):

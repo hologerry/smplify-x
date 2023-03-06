@@ -20,19 +20,15 @@ import math
 import os
 import os.path as osp
 import pickle
-import sys
 import time
 
 from collections import defaultdict
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import PIL.Image as pil_img
 import torch
 
 from human_body_prior.tools.model_loader import load_vposer
-from mpl_toolkits.mplot3d import axes3d
 from tqdm import tqdm
 
 import fitting
@@ -276,7 +272,6 @@ def fit_single_frame(
     img,
     idx,
     keypoints,
-    keypoints_render,
     body_model,
     camera,
     joint_weights,
@@ -287,8 +282,8 @@ def fit_single_frame(
     shape_prior,
     expr_prior,
     angle_prior,
-    joints_blur=None,
-    joints_fix=None,
+    prev_body_pose=None,
+    # joints_fix=None,
     camera_transl=None,
     camera_orient=None,
     betas_fix=None,
@@ -333,7 +328,7 @@ def fit_single_frame(
     **kwargs,
 ):
     assert batch_size == 1, "PyTorch L-BFGS only supports batch_size == 1"
-    print(idx)
+
     device = torch.device("cuda") if use_cuda else torch.device("cpu")
 
     if degrees is None:
@@ -498,7 +493,7 @@ def fit_single_frame(
         focal_length=focal_length,
         dtype=dtype,
     )
-    # print(init_t)
+
     camera_loss = fitting.create_loss(
         "camera_init",
         trans_estimation=init_t,
@@ -507,7 +502,7 @@ def fit_single_frame(
         dtype=dtype,
     ).to(device=device)
     camera_loss.trans_estimation[:] = init_t
-    #  print(init_t)
+
     loss = fitting.create_loss(
         loss_type=loss_type,
         joint_weights=joint_weights,
@@ -532,7 +527,7 @@ def fit_single_frame(
         **kwargs,
     )
     loss = loss.to(device=device)
-    #   camera=camera.to(device=device)
+    # camera=camera.to(device=device)
     with fitting.FittingMonitor(batch_size=batch_size, visualize=visualize, **kwargs) as monitor:
 
         img = torch.tensor(img, dtype=dtype)
@@ -574,9 +569,9 @@ def fit_single_frame(
             camera,
             gt_joints,
             visibility,
-            joints_blur,
+            prev_body_pose,
             idx,
-            joints_fix,
+            # joints_fix,
             camera_loss,
             create_graph=camera_create_graph,
             use_vposer=use_vposer,
@@ -599,6 +594,51 @@ def fit_single_frame(
             pose_embedding=pose_embedding,
             vposer=vposer,
         )
+
+
+        if save_meshes:
+            results = []
+            print("Saving results and meshes")
+            body_pose = vposer.decode(pose_embedding, output_type="aa").view(1, -1) if use_vposer else None
+
+            model_type = kwargs.get("model_type", "smpl")
+            append_wrists = model_type == "smpl" and use_vposer
+            if append_wrists:
+                wrist_pose = torch.zeros([body_pose.shape[0], 6], dtype=body_pose.dtype, device=body_pose.device)
+                body_pose = torch.cat([body_pose, wrist_pose], dim=1)
+
+            model_output = body_model(return_verts=True, body_pose=body_pose)
+            vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+            prev_body_pose = model_output.body_pose.reshape(1, 21, 3).detach()
+            # fix_points_idx = torch.tensor([0, 1, 2, 5, 8, 9, 10, 12, 13], dtype=torch.long).to(
+            #     device=prev_body_pose.device
+            # )
+            # joints_fix = torch.index_select(prev_body_pose, 1, fix_points_idx)[0, :, :]
+            camera_transl_1 = camera.translation[0, :].detach()
+            camera_orient = model_output.global_orient[0, :].detach()
+            betas_fix = model_output.betas[0].detach()
+
+            results.append(
+                {
+                    "body_pose_rot": model_output.body_pose.detach().cpu().numpy(),
+                    "left_hand_pose_rot": model_output.left_hand_pose.detach().cpu().numpy(),
+                    "right_hand_pose_rot": model_output.right_hand_pose.detach().cpu().numpy(),
+                }
+            )
+            result_cam_fn = result_fn.replace(".pkl", f"_cam_opt.pkl")
+            with open(result_cam_fn, "wb") as result_file:
+                pickle.dump(results, result_file, protocol=2)
+            print(f"Saved results to {result_cam_fn}")
+
+            import trimesh
+
+            out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
+            rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
+            # print(body_model.output)
+            out_mesh.apply_transform(rot)
+            mesh_cam_fn = mesh_fn.replace(".obj", f"_cam_opt.obj")
+            out_mesh.export(mesh_cam_fn)
+            print(f"Saved mesh to {mesh_cam_fn}")
 
         if idx != 0:
             camera_opt_params[0].requires_grad = False
@@ -680,9 +720,9 @@ def fit_single_frame(
                     camera=camera,
                     gt_joints=gt_joints,
                     visibility=visibility,
-                    joints_blur=joints_blur,
+                    prev_body_pose=prev_body_pose,
                     idx=idx,
-                    joints_fix=joints_fix,
+                    # joints_fix=joints_fix,
                     joints_conf=joints_conf,
                     joint_weights=joint_weights,
                     loss=loss,
@@ -715,6 +755,50 @@ def fit_single_frame(
                     if interactive:
                         tqdm.write("Stage {:03d} done after {:.4f} seconds".format(opt_idx, elapsed))
 
+                    if save_meshes:
+                        results = []
+                        print("Saving results and meshes")
+                        body_pose = vposer.decode(pose_embedding, output_type="aa").view(1, -1) if use_vposer else None
+
+                        model_type = kwargs.get("model_type", "smpl")
+                        append_wrists = model_type == "smpl" and use_vposer
+                        if append_wrists:
+                            wrist_pose = torch.zeros([body_pose.shape[0], 6], dtype=body_pose.dtype, device=body_pose.device)
+                            body_pose = torch.cat([body_pose, wrist_pose], dim=1)
+
+                        model_output = body_model(return_verts=True, body_pose=body_pose)
+                        vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+                        prev_body_pose = model_output.body_pose.reshape(1, 21, 3).detach()
+                        # fix_points_idx = torch.tensor([0, 1, 2, 5, 8, 9, 10, 12, 13], dtype=torch.long).to(
+                        #     device=prev_body_pose.device
+                        # )
+                        # joints_fix = torch.index_select(prev_body_pose, 1, fix_points_idx)[0, :, :]
+                        camera_transl_1 = camera.translation[0, :].detach()
+                        camera_orient = model_output.global_orient[0, :].detach()
+                        betas_fix = model_output.betas[0].detach()
+
+                        results.append(
+                            {
+                                "body_pose_rot": model_output.body_pose.detach().cpu().numpy(),
+                                "left_hand_pose_rot": model_output.left_hand_pose.detach().cpu().numpy(),
+                                "right_hand_pose_rot": model_output.right_hand_pose.detach().cpu().numpy(),
+                            }
+                        )
+                        result_cam_fn = result_fn.replace(".pkl", f"_opt_{opt_idx}.pkl")
+                        with open(result_cam_fn, "wb") as result_file:
+                            pickle.dump(results, result_file, protocol=2)
+                        print(f"Saved results to {result_cam_fn}")
+
+                        import trimesh
+
+                        out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
+                        rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
+                        # print(body_model.output)
+                        out_mesh.apply_transform(rot)
+                        mesh_cam_fn = mesh_fn.replace(".obj", f"_opt_{opt_idx}.obj")
+                        out_mesh.export(mesh_cam_fn)
+                        print(f"Saved mesh to {mesh_cam_fn}")
+
             if interactive:
                 if use_cuda and torch.cuda.is_available():
                     torch.cuda.synchronize()
@@ -731,6 +815,7 @@ def fit_single_frame(
                 result["body_pose"] = pose_embedding.detach().cpu().numpy()
             results.append({"result": result})
 
+
     if save_meshes:
         print("Saving results and meshes")
         body_pose = vposer.decode(pose_embedding, output_type="aa").view(1, -1) if use_vposer else None
@@ -743,9 +828,11 @@ def fit_single_frame(
 
         model_output = body_model(return_verts=True, body_pose=body_pose)
         vertices = model_output.vertices.detach().cpu().numpy().squeeze()
-        joints_blur = model_output.body_pose.reshape(1, 21, 3).detach()
-        fix_points_idx = torch.tensor([0, 1, 2, 5, 8, 9, 10, 12, 13], dtype=torch.long).to(device=joints_blur.device)
-        joints_fix = torch.index_select(joints_blur, 1, fix_points_idx)[0, :, :]
+        prev_body_pose = model_output.body_pose.reshape(1, 21, 3).detach()
+        # fix_points_idx = torch.tensor([0, 1, 2, 5, 8, 9, 10, 12, 13], dtype=torch.long).to(
+        #     device=prev_body_pose.device
+        # )
+        # joints_fix = torch.index_select(prev_body_pose, 1, fix_points_idx)[0, :, :]
         camera_transl_1 = camera.translation[0, :].detach()
         camera_orient = model_output.global_orient[0, :].detach()
         betas_fix = model_output.betas[0].detach()
@@ -775,4 +862,4 @@ def fit_single_frame(
     if final_loss_val is None:
         nan_flag = True
         print("nan_flag:true")
-    return joints_blur, joints_fix, camera_transl_1, camera_orient, betas_fix, nan_flag
+    return prev_body_pose, camera_transl_1, camera_orient, betas_fix, nan_flag

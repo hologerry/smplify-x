@@ -129,14 +129,11 @@ class FittingMonitor(object):
     def __enter__(self):
         self.steps = 0
         if self.visualize:
-            #    print('vis_1')
             self.mv = MeshViewer(body_color=self.body_color)
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):
-        #  return self
         if self.visualize:
-            #    print('view_2')
             self.mv.close_viewer()
 
     def set_colors(self, vertex_color):
@@ -175,20 +172,22 @@ class FittingMonitor(object):
             loss = optimizer.step(closure)
 
             if torch.isnan(loss).sum() > 0:
-                print("NaN loss value, stopping!")
+                print("NaN loss value, stopping!", n)
                 break
 
             if torch.isinf(loss).sum() > 0:
-                print("Infinite loss value, stopping!")
+                print("Infinite loss value, stopping!", n)
                 break
 
             if n > 0 and prev_loss is not None and self.ftol > 0:
                 loss_rel_change = utils.rel_change(prev_loss, loss.item())
 
                 if loss_rel_change <= self.ftol:
+                    print("Relative change in loss is below threshold, stopping!", n)
                     break
 
             if all([torch.abs(var.grad.view(-1).max()).item() < self.gtol for var in params if var.grad is not None]):
+                print("Max gradient is below threshold, stopping!", n)
                 break
 
             # if self.visualize and n % self.summary_steps == 0:
@@ -213,9 +212,9 @@ class FittingMonitor(object):
         camera=None,
         gt_joints=None,
         visibility=None,
-        joints_blur=None,
+        prev_body_pose=None,
         idx=0,
-        joints_fix=None,
+        # joints_fix=None,
         loss=None,
         joints_conf=None,
         joint_weights=None,
@@ -253,9 +252,9 @@ class FittingMonitor(object):
                 camera=camera,
                 gt_joints=gt_joints,
                 visibility=visibility,
-                joints_blur=joints_blur,
+                prev_body_pose=prev_body_pose,
                 idx=idx,
-                joints_fix=joints_fix,
+                # joints_fix=joints_fix,
                 body_model_faces=faces_tensor,
                 joints_conf=joints_conf,
                 joint_weights=joint_weights,
@@ -360,6 +359,8 @@ class SMPLifyLoss(nn.Module):
         if self.interpenetration:
             self.register_buffer("coll_loss_weight", torch.tensor(coll_loss_weight, dtype=dtype))
 
+        self.smplify_call_iter = 0
+
     def reset_loss_weights(self, loss_weight_dict):
         for key in loss_weight_dict:
             if hasattr(self, key):
@@ -378,9 +379,9 @@ class SMPLifyLoss(nn.Module):
         camera,
         gt_joints,
         visibility,
-        joints_blur,
+        prev_body_pose,
         idx,
-        joints_fix,
+        # joints_fix,
         joints_conf,
         body_model_faces,
         joint_weights,
@@ -388,14 +389,15 @@ class SMPLifyLoss(nn.Module):
         pose_embedding=None,
         **kwargs
     ):
-
+        print("self.smplify_call_iter", self.smplify_call_iter)
+        self.smplify_call_iter += 1
         smooth_loss_weight = 8000
         smooth_loss_weight_1 = 15000
 
-        left_elbow_weight = 3000
-        right_elbow_weight = 3000
+        left_elbow_weight = 30000
+        right_elbow_weight = 30000
         projected_joints = camera(body_model_output.joints)
-        joints_to_blur = body_model_output.body_pose.reshape(1, 21, 3)
+        cur_body_pose = body_model_output.body_pose.reshape(1, 21, 3)
 
         weights = (joint_weights * joints_conf if self.use_joints_conf else joint_weights).unsqueeze(dim=-1)
 
@@ -408,9 +410,6 @@ class SMPLifyLoss(nn.Module):
             smooth_loss_weight_1 = 0
 
         zero_pose = torch.zeros([1, 1, 3], dtype=gt_joints.dtype).to(device=weights.device)
-        # gt_fix_points[0] = torch.index_select(joints_blur, 1, fix_points_idx)[0, :, :]
-        # gt_fix_points = gt_fix_points.to(device=weights.device)
-        # fix_points = torch.index_select(joints_to_blur, 1, fix_points_idx).to(device=weights.device)
 
         joint_diff = self.robustifier(gt_joints - projected_joints)
         joint_diff_1 = (
@@ -420,33 +419,32 @@ class SMPLifyLoss(nn.Module):
         )
         joint_loss = (torch.sum(weights**2 * joint_diff) * self.data_weight**2) + torch.sum(joint_diff_1) * 50
 
-        # joint_diff_fix = self.robustifier(gt_fix_points - fix_points)
-        # joint_loss_fix = torch.sum(joint_diff_fix) * joints_fix_weight
-        pitch_loss_0 = self.robustifier(joints_to_blur[:, 0:11, :] - zero_pose)
+        standing_loss_0 = self.robustifier(cur_body_pose[:, 0:11, :] - zero_pose)
 
-        pitch_loss_1 = (
+        standing_loss_1 = (
             self.robustifier(body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 8, 2])
+            # + self.robustifier(body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 0, 2])
             + self.robustifier(body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 10, 2])
             + self.robustifier(body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 13, 2])
             + self.robustifier(-body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 9, 2])
             + self.robustifier(-body_model_output.joints[:, 1, 2] - body_model_output.joints[:, 12, 2])
         )
 
-        pitch_loss = torch.sum(pitch_loss_0) * 300000 + torch.sum(pitch_loss_1) * 700000
+        standing_loss = torch.sum(standing_loss_0) * 300000 + torch.sum(standing_loss_1) * 700000
 
-        blur_loss_0 = self.robustifier(joints_to_blur - joints_blur)
-        blur_loss_1 = self.robustifier(joints_to_blur[:, 11:19, :] - joints_blur[:, 11:19, :])
+        blur_loss_0 = self.robustifier(cur_body_pose - prev_body_pose)
+        blur_loss_1 = self.robustifier(cur_body_pose[:, 11:19, :] - prev_body_pose[:, 11:19, :])
 
         blur_loss = torch.sum(blur_loss_0) * smooth_loss_weight + torch.sum(blur_loss_1) * smooth_loss_weight_1
         elbow_loss = (
             torch.sum(
-                self.robustifier(joints_to_blur[:, 17, :] - zero_pose)
-                + self.robustifier(joints_to_blur[:, 19, :] - zero_pose)
+                self.robustifier(cur_body_pose[:, 17, :] - zero_pose)
+                + self.robustifier(cur_body_pose[:, 19, :] - zero_pose)
             )
             * left_elbow_weight
             + torch.sum(
-                self.robustifier(joints_to_blur[:, 18, :] - zero_pose)
-                + self.robustifier(joints_to_blur[:, 20, :] - zero_pose)
+                self.robustifier(cur_body_pose[:, 18, :] - zero_pose)
+                + self.robustifier(cur_body_pose[:, 20, :] - zero_pose)
             )
             * right_elbow_weight
         )
@@ -515,7 +513,7 @@ class SMPLifyLoss(nn.Module):
             + right_hand_prior_loss
             # + joint_loss_fix
             + blur_loss
-            + pitch_loss
+            + standing_loss
             + elbow_loss
         )  # +twist_loss)#+ joint_loss_dep)
 
@@ -535,7 +533,7 @@ class SMPLifyCameraInitLoss(nn.Module):
     ):
         super(SMPLifyCameraInitLoss, self).__init__()
         self.dtype = dtype
-
+        self.cam_call_iter = 0
         if trans_estimation is not None:
             self.register_buffer("trans_estimation", utils.to_tensor(trans_estimation, dtype=dtype))
         else:
@@ -554,8 +552,13 @@ class SMPLifyCameraInitLoss(nn.Module):
                 )
                 setattr(self, key, weight_tensor)
 
-    def forward(self, body_model_output, camera, gt_joints, visibility, joints_blur, idx, joints_fix, **kwargs):
-
+    def forward(self, body_model_output, camera, gt_joints, visibility, prev_body_pose, idx, **kwargs):
+        print("self.cam_call_iter", self.cam_call_iter)
+        self.cam_call_iter += 1
+        print("camera.translation", camera.translation)
+        print("camera.rotation", camera.rotation)
+        print("body global rotation", body_model_output.global_orient)
+        print("-"*20)
         projected_joints = camera(body_model_output.joints)
         #  print(projected_joints)
         joint_error = torch.pow(
