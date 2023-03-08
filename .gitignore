@@ -112,3 +112,5 @@ smplx_debug
 smplx_wlasl_output
 smplx_msasl_output*
 
+teaser_figures
+smplx_teaser_figures_output
